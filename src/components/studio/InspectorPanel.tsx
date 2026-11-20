@@ -11,13 +11,19 @@ import {
   Sliders,
   Sun,
 } from 'lucide-react';
-import { WeaponId } from '../../game/types';
+import {
+  ControlMode,
+  GraphicsQuality,
+  WEAPONS,
+  WeaponId,
+} from '../../game/types';
 import {
   AssetRole,
   EnvironmentPreset,
   EnvironmentSettings,
   MaterialOverride,
   PlaytestSettings,
+  QUALITY_LABELS,
   ROLE_LABELS,
   SceneObjectMeta,
 } from '../../studio/types';
@@ -76,17 +82,9 @@ interface InspectorPanelProps {
 
 type InspectorTab = 'object' | 'environment' | 'playtest';
 
-const WEAPON_OPTIONS: Array<{ id: WeaponId | 'none'; label: string }> = [
-  { id: 'm4a1', label: 'M4A1 (Rifle)' },
-  { id: 'ak47', label: 'AK-47 (Rifle)' },
-  { id: 'xm8', label: 'XM8 (Rifle)' },
-  { id: 'ump45', label: 'UMP45 (SMG)' },
-  { id: 'm1014', label: 'M1014 (Doze)' },
-  { id: 'awm', label: 'AWM (Sniper)' },
-  { id: 'deagle', label: 'Desert Eagle' },
-  { id: 'g18', label: 'G18 (Pistola)' },
-  { id: 'none', label: 'Desarmado (Soco)' },
-];
+const SLOT1_WEAPONS: WeaponId[] = ['m4a1', 'ak47', 'scar', 'xm8', 'awm', 'm1014'];
+const SLOT2_WEAPONS: WeaponId[] = ['ump45', 'm1014', 'm4a1', 'ak47', 'awm', 'scar'];
+const SLOT3_WEAPONS: WeaponId[] = ['deagle', 'g18'];
 
 export const InspectorPanel: React.FC<InspectorPanelProps> = ({
   selected,
@@ -834,9 +832,9 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
               )}
             </div>
 
-            <div className="space-y-2 border-t border-[#222630] pt-3">
+            <div className="space-y-2.5 border-t border-[#222630] pt-3">
               <span className="block text-xs font-semibold text-slate-200">
-                Câmera & Arma de Teste
+                Câmera & Loadout (Slots 1–3)
               </span>
               <div className="grid grid-cols-2 gap-1.5">
                 <button
@@ -863,20 +861,168 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                 </button>
               </div>
               {playtestSettings.playerModel !== 'custom' && (
-                <select
-                  value={playtestSettings.weaponId}
-                  onChange={(e) =>
-                    onUpdatePlaytest({ weaponId: e.target.value as WeaponId | 'none' })
-                  }
-                  className="w-full rounded border border-[#252b38] bg-[#0d0f14] px-2.5 py-1.5 text-xs text-slate-200"
-                >
-                  {WEAPON_OPTIONS.map((w) => (
-                    <option key={w.id} value={w.id}>
-                      {w.label}
-                    </option>
-                  ))}
-                </select>
+                <div className="space-y-2">
+                  <div className="grid grid-cols-3 gap-1.5">
+                    <div>
+                      <label className="mb-1 block text-[10px] text-slate-400">Slot 1</label>
+                      <select
+                        value={playtestSettings.slot1Weapon}
+                        onChange={(e) =>
+                          onUpdatePlaytest({ slot1Weapon: e.target.value as WeaponId })
+                        }
+                        className="w-full rounded border border-[#252b38] bg-[#0d0f14] px-1.5 py-1.5 text-[11px] text-slate-200"
+                      >
+                        {SLOT1_WEAPONS.map((w) => (
+                          <option key={w} value={w}>
+                            {WEAPONS[w].shortName}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-[10px] text-slate-400">Slot 2</label>
+                      <select
+                        value={playtestSettings.slot2Weapon}
+                        onChange={(e) =>
+                          onUpdatePlaytest({ slot2Weapon: e.target.value as WeaponId })
+                        }
+                        className="w-full rounded border border-[#252b38] bg-[#0d0f14] px-1.5 py-1.5 text-[11px] text-slate-200"
+                      >
+                        {SLOT2_WEAPONS.map((w) => (
+                          <option key={w} value={w}>
+                            {WEAPONS[w].shortName}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                    <div>
+                      <label className="mb-1 block text-[10px] text-slate-400">Slot 3</label>
+                      <select
+                        value={playtestSettings.slot3Weapon}
+                        onChange={(e) =>
+                          onUpdatePlaytest({ slot3Weapon: e.target.value as WeaponId })
+                        }
+                        className="w-full rounded border border-[#252b38] bg-[#0d0f14] px-1.5 py-1.5 text-[11px] text-slate-200"
+                      >
+                        {SLOT3_WEAPONS.map((w) => (
+                          <option key={w} value={w}>
+                            {WEAPONS[w].shortName}
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+                  </div>
+                </div>
               )}
+            </div>
+
+            {/* Graphics Quality & Mobile HUD Mode */}
+            <div className="space-y-3 border-t border-[#222630] pt-3">
+              <div>
+                <div className="mb-1.5 flex items-center justify-between">
+                  <span className="text-xs font-semibold text-slate-200">Qualidade Gráfica</span>
+                  <span className="font-mono text-[10px] text-amber-400">
+                    {QUALITY_LABELS[playtestSettings.quality]}
+                  </span>
+                </div>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {(['low', 'medium', 'high'] as GraphicsQuality[]).map((q) => (
+                    <button
+                      key={q}
+                      type="button"
+                      onClick={() => onUpdatePlaytest({ quality: q })}
+                      className={`rounded-md border px-2 py-1.5 text-[11px] font-medium ${
+                        playtestSettings.quality === q
+                          ? 'border-amber-500/70 bg-amber-500/15 text-amber-300'
+                          : 'border-[#252b38] bg-[#161a23] text-slate-300'
+                      }`}
+                    >
+                      {QUALITY_LABELS[q]}
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <div>
+                <span className="mb-1.5 block text-xs font-semibold text-slate-200">
+                  Controles & HUD Mobile
+                </span>
+                <div className="grid grid-cols-3 gap-1.5">
+                  {(
+                    [
+                      { id: 'auto', label: 'Auto' },
+                      { id: 'mobile', label: 'Mobile' },
+                      { id: 'desktop', label: 'PC' },
+                    ] as Array<{ id: ControlMode; label: string }>
+                  ).map((m) => (
+                    <button
+                      key={m.id}
+                      type="button"
+                      onClick={() => onUpdatePlaytest({ controlMode: m.id })}
+                      className={`rounded-md border px-2 py-1.5 text-[11px] font-medium ${
+                        playtestSettings.controlMode === m.id
+                          ? 'border-amber-500/70 bg-amber-500/15 text-amber-300'
+                          : 'border-[#252b38] bg-[#161a23] text-slate-300'
+                      }`}
+                    >
+                      {m.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            </div>
+
+            {/* Sensitivity */}
+            <div className="space-y-2.5 border-t border-[#222630] pt-3">
+              <div className="flex items-center justify-between">
+                <span className="text-xs font-semibold text-slate-200">Sensibilidade</span>
+                <button
+                  type="button"
+                  onClick={() =>
+                    onUpdatePlaytest({
+                      generalSensitivity: 55,
+                      aimSensitivity: 45,
+                      scopeSensitivity: 35,
+                      invertY: false,
+                    })
+                  }
+                  className="text-[11px] text-slate-400 hover:text-white"
+                >
+                  Resetar
+                </button>
+              </div>
+              {(
+                [
+                  { key: 'generalSensitivity', label: 'Geral' },
+                  { key: 'aimSensitivity', label: 'Mira (Red Dot)' },
+                  { key: 'scopeSensitivity', label: 'Luneta (AWM)' },
+                ] as const
+              ).map(({ key, label }) => (
+                <div key={key}>
+                  <div className="mb-1 flex justify-between text-[11px] text-slate-400">
+                    <span>{label}</span>
+                    <span className="font-mono text-slate-200">{playtestSettings[key]}</span>
+                  </div>
+                  <input
+                    type="range"
+                    min={5}
+                    max={100}
+                    step={1}
+                    value={playtestSettings[key]}
+                    onChange={(e) => onUpdatePlaytest({ [key]: Number(e.target.value) })}
+                    className="w-full accent-amber-500"
+                  />
+                </div>
+              ))}
+              <label className="flex cursor-pointer items-center justify-between rounded border border-[#232834] bg-[#161a23] px-2.5 py-1.5 text-[11px] text-slate-200">
+                <span>Inverter Eixo Y</span>
+                <input
+                  type="checkbox"
+                  checked={playtestSettings.invertY}
+                  onChange={(e) => onUpdatePlaytest({ invertY: e.target.checked })}
+                  className="accent-amber-500"
+                />
+              </label>
             </div>
 
             <div className="space-y-3 border-t border-[#222630] pt-3">

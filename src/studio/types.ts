@@ -1,4 +1,4 @@
-import { WeaponId } from '../game/types';
+import { ControlMode, GraphicsQuality, WeaponId, WeaponSlotId } from '../game/types';
 
 export type AssetRole = 'map' | 'asset' | 'character' | 'weapon' | 'spawn';
 
@@ -36,7 +36,7 @@ export interface SubMeshInfo {
 }
 
 export interface MaterialOverride {
-  tint: string; // '#ffffff' means neutral/original multiplier or override
+  tint: string;
   useTint: boolean;
   roughness: number; // -1 means keep original
   metalness: number; // -1 means keep original
@@ -89,6 +89,12 @@ export interface EnvironmentSettings {
   skyColor: string;
 }
 
+export interface PlaytestWeaponSlot {
+  weaponId: WeaponId;
+  ammoInMag: number;
+  magSize: number;
+}
+
 export interface PlaytestSettings {
   playerModel: 'adam' | 'eva' | 'custom';
   customCharacterObjectId: string | null;
@@ -98,6 +104,16 @@ export interface PlaytestSettings {
   jumpForce: number;
   gravity: number;
   weaponId: WeaponId | 'none';
+  slot1Weapon: WeaponId;
+  slot2Weapon: WeaponId;
+  slot3Weapon: WeaponId;
+  activeSlot: WeaponSlotId;
+  quality: GraphicsQuality;
+  controlMode: ControlMode;
+  generalSensitivity: number; // 0 .. 100
+  aimSensitivity: number; // 0 .. 100
+  scopeSensitivity: number; // 0 .. 100
+  invertY: boolean;
 }
 
 export interface PlaytestHudState {
@@ -107,8 +123,18 @@ export interface PlaytestHudState {
   speed: number;
   stance: 'stand' | 'crouch' | 'prone';
   isGrounded: boolean;
+  isSprinting: boolean;
+  isAiming: boolean;
+  isReloading: boolean;
+  reloadProgress: number;
   pointerLocked: boolean;
   cameraMode: 'third' | 'first';
+  activeSlot: WeaponSlotId;
+  slots: {
+    1: PlaytestWeaponSlot;
+    2: PlaytestWeaponSlot;
+    3: PlaytestWeaponSlot;
+  };
   lastHitDistance: number | null;
   lastHitMeshName: string | null;
 }
@@ -200,6 +226,22 @@ export const DEFAULT_PLAYTEST_SETTINGS: PlaytestSettings = {
   jumpForce: 7.4,
   gravity: 20.0,
   weaponId: 'm4a1',
+  slot1Weapon: 'm4a1',
+  slot2Weapon: 'ump45',
+  slot3Weapon: 'deagle',
+  activeSlot: 1,
+  quality: 'medium',
+  controlMode: 'auto',
+  generalSensitivity: 55,
+  aimSensitivity: 45,
+  scopeSensitivity: 35,
+  invertY: false,
+};
+
+export const QUALITY_LABELS: Record<GraphicsQuality, string> = {
+  low: 'Suave',
+  medium: 'Padrão',
+  high: 'Ultra',
 };
 
 export const ROLE_LABELS: Record<AssetRole, string> = {

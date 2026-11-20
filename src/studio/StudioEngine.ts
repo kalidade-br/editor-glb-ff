@@ -11,7 +11,15 @@ import { BuildingMaterials } from '../game/buildingPrefabs';
 import { CharacterAnimator } from '../game/characterAnimator';
 import { CharacterRig, createCharacterRig } from '../game/characterBuilder';
 import { createProceduralTextures, ProceduralTextureSet } from '../game/textures';
-import { CharacterConfig, PlayerStance, WeaponId } from '../game/types';
+import {
+  CharacterConfig,
+  ControlMode,
+  GraphicsQuality,
+  PlayerStance,
+  WEAPONS,
+  WeaponId,
+  WeaponSlotId,
+} from '../game/types';
 import {
   buildBuiltinPrefabGroup,
   BUILTIN_CATALOG,
@@ -29,6 +37,7 @@ import {
   MaterialOverride,
   PlaytestHudState,
   PlaytestSettings,
+  PlaytestWeaponSlot,
   SceneObjectMeta,
   SerializedSceneObject,
   StudioProjectFile,
@@ -170,6 +179,50 @@ function base64ToArrayBuffer(b64: string): ArrayBuffer {
   return bytes.buffer;
 }
 
+const PLAYTEST_PREFS_STORAGE_KEY = 'studio3d_playtest_prefs_v1';
+
+interface SavedPlaytestPrefs {
+  quality?: GraphicsQuality;
+  controlMode?: ControlMode;
+  generalSensitivity?: number;
+  aimSensitivity?: number;
+  scopeSensitivity?: number;
+  invertY?: boolean;
+  slot1Weapon?: WeaponId;
+  slot2Weapon?: WeaponId;
+  slot3Weapon?: WeaponId;
+}
+
+function loadPlaytestPrefs(): SavedPlaytestPrefs {
+  try {
+    const raw = window.localStorage.getItem(PLAYTEST_PREFS_STORAGE_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as SavedPlaytestPrefs;
+    return parsed && typeof parsed === 'object' ? parsed : {};
+  } catch {
+    return {};
+  }
+}
+
+function savePlaytestPrefs(settings: PlaytestSettings): void {
+  try {
+    const payload: SavedPlaytestPrefs = {
+      quality: settings.quality,
+      controlMode: settings.controlMode,
+      generalSensitivity: settings.generalSensitivity,
+      aimSensitivity: settings.aimSensitivity,
+      scopeSensitivity: settings.scopeSensitivity,
+      invertY: settings.invertY,
+      slot1Weapon: settings.slot1Weapon,
+      slot2Weapon: settings.slot2Weapon,
+      slot3Weapon: settings.slot3Weapon,
+    };
+    window.localStorage.setItem(PLAYTEST_PREFS_STORAGE_KEY, JSON.stringify(payload));
+  } catch {
+    // Ignore storage quota / private mode issues
+  }
+}
+
 function detectSoftwareWebGL(): boolean {
   try {
     const canvas = document.createElement('canvas');
@@ -260,12 +313,36 @@ export class StudioEngine {
   private camPitch = 0.24;
   private stance: PlayerStance = 'stand';
   private isGrounded = true;
+  private isSprintingState = false;
   private isAiming = false;
   private isFiring = false;
+  private isReloading = false;
+  private reloadElapsed = 0;
+  private reloadDuration = 0.36;
   private fireCooldown = 0;
   private pointerLocked = false;
   private playtestDragLook = false;
   private lastPlaytestDragPos = { x: 0, y: 0 };
+  private mobileMoveX = 0;
+  private mobileMoveY = 0;
+  private mobileSprintLock = false;
+  private playtestSlots: Record<1 | 2 | 3, PlaytestWeaponSlot> = {
+    1: {
+      weaponId: DEFAULT_PLAYTEST_SETTINGS.slot1Weapon,
+      ammoInMag: WEAPONS[DEFAULT_PLAYTEST_SETTINGS.slot1Weapon].magSize,
+      magSize: WEAPONS[DEFAULT_PLAYTEST_SETTINGS.slot1Weapon].magSize,
+    },
+    2: {
+      weaponId: DEFAULT_PLAYTEST_SETTINGS.slot2Weapon,
+      ammoInMag: WEAPONS[DEFAULT_PLAYTEST_SETTINGS.slot2Weapon].magSize,
+      magSize: WEAPONS[DEFAULT_PLAYTEST_SETTINGS.slot2Weapon].magSize,
+    },
+    3: {
+      weaponId: DEFAULT_PLAYTEST_SETTINGS.slot3Weapon,
+      ammoInMag: WEAPONS[DEFAULT_PLAYTEST_SETTINGS.slot3Weapon].magSize,
+      magSize: WEAPONS[DEFAULT_PLAYTEST_SETTINGS.slot3Weapon].magSize,
+    },
+  };
   private walkableMeshes: THREE.Object3D[] = [];
   private collisionMeshes: THREE.Object3D[] = [];
   private tracers: TracerBeam[] = [];
@@ -451,7 +528,16 @@ export class StudioEngine {
     this.exporter = new GLTFExporter();
     this.raycaster = new THREE.Raycaster();
 
+    const savedPrefs = loadPlaytestPrefs();
+    this.playtestSettings = {
+      ...DEFAULT_PLAYTEST_SETTINGS,
+      ...savedPrefs,
+    };
+    this.playtestSettings.weaponId = this.getWeaponForSlot(this.playtestSettings.activeSlot);
+    this.resetPlaytestAmmo();
+
     this.applyEnvironmentSettings(this.environment, false);
+    this.applyGraphicsQuality(this.playtestSettings.quality);
 
     // Bind events
     this.boundHandlers = {
@@ -1515,11 +1601,127 @@ export class StudioEngine {
     if (emit) this.emitSnapshot();
   }
 
-  public updatePlaytestSettings(patch: Partial<PlaytestSettings>): void {
-    this.playtestSettings = { ...this.playtestSettings, ...patch };
-    if (this.mode === 'playtest' && this.playerRig && patch.weaponId !== undefined) {
-      this.playerRig.setWeapon(patch.weaponId === 'none' ? null : patch.weaponId);
+  public applyGraphicsQuality(quality: GraphicsQuality): void {
+    const dpr = window.devicePixelRatio || 1;
+    const pixelRatio = this.isSoftwareGl
+      ? 1
+      : quality === 'low'
+        ? 1
+        : quality === 'medium'
+          ? Math.min(dpr, 1.5)
+          : Math.min(dpr, 2);
+    this.renderer.setPixelRatio(pixelRatio);
+
+    const shadowsOn = !this.isSoftwareGl && quality !== 'low';
+    this.renderer.shadowMap.enabled = shadowsOn;
+    this.keyLight.castShadow = shadowsOn;
+
+    const mapSize = quality === 'high' ? 2048 : 1024;
+    if (this.keyLight.shadow.mapSize.x !== mapSize) {
+      this.keyLight.shadow.mapSize.set(mapSize, mapSize);
+      this.keyLight.shadow.map?.dispose();
+      this.keyLight.shadow.map = null;
     }
+    this.renderer.shadowMap.needsUpdate = true;
+  }
+
+  private getWeaponForSlot(slot: WeaponSlotId): WeaponId | 'none' {
+    if (slot === 1) return this.playtestSettings.slot1Weapon;
+    if (slot === 2) return this.playtestSettings.slot2Weapon;
+    if (slot === 3) return this.playtestSettings.slot3Weapon;
+    return 'none';
+  }
+
+  private resetPlaytestAmmo(): void {
+    const s1 = this.playtestSettings.slot1Weapon;
+    const s2 = this.playtestSettings.slot2Weapon;
+    const s3 = this.playtestSettings.slot3Weapon;
+    this.playtestSlots = {
+      1: { weaponId: s1, ammoInMag: WEAPONS[s1].magSize, magSize: WEAPONS[s1].magSize },
+      2: { weaponId: s2, ammoInMag: WEAPONS[s2].magSize, magSize: WEAPONS[s2].magSize },
+      3: { weaponId: s3, ammoInMag: WEAPONS[s3].magSize, magSize: WEAPONS[s3].magSize },
+    };
+  }
+
+  private syncRigWeapons(): void {
+    if (!this.playerRig) return;
+    const active = this.playtestSettings.activeSlot;
+    const activeWeapon = this.getWeaponForSlot(active);
+    this.playerRig.setWeapon(activeWeapon === 'none' ? null : activeWeapon);
+
+    if (active === 1) {
+      this.playerRig.setBackWeapons(this.playtestSettings.slot2Weapon, null);
+    } else if (active === 2) {
+      this.playerRig.setBackWeapons(this.playtestSettings.slot1Weapon, null);
+    } else {
+      this.playerRig.setBackWeapons(
+        this.playtestSettings.slot1Weapon,
+        this.playtestSettings.slot2Weapon,
+      );
+    }
+    this.playerRig.setPistolBackWeapon?.(
+      active === 3 ? null : this.playtestSettings.slot3Weapon,
+    );
+  }
+
+  public updatePlaytestSettings(patch: Partial<PlaytestSettings>): void {
+    const prevQuality = this.playtestSettings.quality;
+    const next = { ...this.playtestSettings, ...patch };
+
+    // Keep weaponId and slots consistent
+    if (patch.slot1Weapon && patch.slot1Weapon !== this.playtestSettings.slot1Weapon) {
+      this.playtestSlots[1] = {
+        weaponId: patch.slot1Weapon,
+        ammoInMag: WEAPONS[patch.slot1Weapon].magSize,
+        magSize: WEAPONS[patch.slot1Weapon].magSize,
+      };
+    }
+    if (patch.slot2Weapon && patch.slot2Weapon !== this.playtestSettings.slot2Weapon) {
+      this.playtestSlots[2] = {
+        weaponId: patch.slot2Weapon,
+        ammoInMag: WEAPONS[patch.slot2Weapon].magSize,
+        magSize: WEAPONS[patch.slot2Weapon].magSize,
+      };
+    }
+    if (patch.slot3Weapon && patch.slot3Weapon !== this.playtestSettings.slot3Weapon) {
+      this.playtestSlots[3] = {
+        weaponId: patch.slot3Weapon,
+        ammoInMag: WEAPONS[patch.slot3Weapon].magSize,
+        magSize: WEAPONS[patch.slot3Weapon].magSize,
+      };
+    }
+
+    if (patch.weaponId !== undefined && patch.activeSlot === undefined) {
+      if (patch.weaponId === 'none') {
+        next.activeSlot = 4;
+      } else {
+        const targetSlot: 1 | 2 | 3 = next.activeSlot === 4 ? 1 : next.activeSlot;
+        next.activeSlot = targetSlot;
+        if (targetSlot === 1) next.slot1Weapon = patch.weaponId;
+        if (targetSlot === 2) next.slot2Weapon = patch.weaponId;
+        if (targetSlot === 3) next.slot3Weapon = patch.weaponId;
+        this.playtestSlots[targetSlot] = {
+          weaponId: patch.weaponId,
+          ammoInMag: WEAPONS[patch.weaponId].magSize,
+          magSize: WEAPONS[patch.weaponId].magSize,
+        };
+      }
+    }
+
+    this.playtestSettings = next;
+    this.playtestSettings.weaponId = this.getWeaponForSlot(this.playtestSettings.activeSlot);
+
+    if (patch.quality && patch.quality !== prevQuality) {
+      this.applyGraphicsQuality(patch.quality);
+    }
+
+    if (this.mode === 'playtest') {
+      this.isReloading = false;
+      this.reloadElapsed = 0;
+      this.syncRigWeapons();
+    }
+
+    savePlaytestPrefs(this.playtestSettings);
     this.emitSnapshot();
   }
 
@@ -1840,8 +2042,18 @@ export class StudioEngine {
     this.camPitch = 0.22;
     this.stance = 'stand';
     this.isGrounded = true;
+    this.isSprintingState = false;
+    this.isAiming = false;
+    this.isFiring = false;
+    this.isReloading = false;
+    this.reloadElapsed = 0;
+    this.mobileMoveX = 0;
+    this.mobileMoveY = 0;
+    this.mobileSprintLock = false;
     this.lastHitDistance = null;
     this.lastHitMeshName = null;
+    this.resetPlaytestAmmo();
+    this.playtestSettings.weaponId = this.getWeaponForSlot(this.playtestSettings.activeSlot);
     this.playerAnimator.reset();
 
     // Ensure Adam/Eva GLBs are ready if selected
@@ -1851,7 +2063,7 @@ export class StudioEngine {
 
     this.spawnPlaytestCharacter();
     this.updatePlaytestCamera(0.016);
-    this.showStatus('Modo Playtest ativo — clique na tela para mirar com o mouse.');
+    this.showStatus('Modo Playtest ativo — teste com teclado/mouse ou HUD Mobile.');
     this.emitSnapshot();
   }
 
@@ -1883,8 +2095,8 @@ export class StudioEngine {
       modelId: this.playtestSettings.playerModel === 'eva' ? 'eva' : 'adam',
     };
     const rig = createCharacterRig(cfg, this.textures.camoParachute, this.textures.contactShadow);
-    rig.setWeapon(this.playtestSettings.weaponId === 'none' ? null : this.playtestSettings.weaponId);
     this.playerRig = rig;
+    this.syncRigWeapons();
     this.playtestGroup.add(rig.root);
   }
 
@@ -1910,11 +2122,20 @@ export class StudioEngine {
     this.keys.clear();
     this.isAiming = false;
     this.isFiring = false;
+    this.isReloading = false;
+    this.reloadElapsed = 0;
+    this.isSprintingState = false;
+    this.mobileMoveX = 0;
+    this.mobileMoveY = 0;
+    this.mobileSprintLock = false;
     this.playtestDragLook = false;
 
     if (document.pointerLockElement === this.renderer.domElement) {
       document.exitPointerLock?.();
     }
+
+    this.camera.fov = 55;
+    this.camera.updateProjectionMatrix();
 
     this.cleanupPlaytestCharacter();
     for (const tr of this.tracers) {
@@ -1960,6 +2181,116 @@ export class StudioEngine {
     }
     if (this.customPlayerObject) {
       this.customPlayerObject.visible = next === 'third';
+    }
+    this.emitSnapshot();
+  }
+
+  // ==========================
+  // Mobile HUD & Playtest Input Actions
+  // ==========================
+
+  public setMobileMove(x: number, y: number): void {
+    this.mobileMoveX = THREE.MathUtils.clamp(x, -1, 1);
+    this.mobileMoveY = THREE.MathUtils.clamp(y, -1, 1);
+  }
+
+  private getActiveSensitivityMultiplier(): number {
+    const isSniperZoom = this.isAiming && this.playtestSettings.weaponId === 'awm';
+    const raw = isSniperZoom
+      ? this.playtestSettings.scopeSensitivity
+      : this.isAiming
+        ? this.playtestSettings.aimSensitivity
+        : this.playtestSettings.generalSensitivity;
+    return 0.2 + (THREE.MathUtils.clamp(raw, 0, 100) / 100) * 1.8;
+  }
+
+  public addPlaytestLookDelta(dx: number, dy: number): void {
+    if (this.mode !== 'playtest') return;
+    const sens = this.getActiveSensitivityMultiplier();
+    const ySign = this.playtestSettings.invertY ? -1 : 1;
+    this.camYaw -= dx * 0.0042 * sens;
+    this.camPitch = THREE.MathUtils.clamp(
+      this.camPitch + dy * 0.0036 * sens * ySign,
+      -1.15,
+      1.25,
+    );
+  }
+
+  public setPlaytestFire(firing: boolean): void {
+    if (this.mode !== 'playtest') return;
+    this.isFiring = firing;
+  }
+
+  public setPlaytestAim(aiming: boolean): void {
+    if (this.mode !== 'playtest') return;
+    this.isAiming = aiming;
+    this.emitSnapshot();
+  }
+
+  public togglePlaytestAim(): void {
+    if (this.mode !== 'playtest') return;
+    this.isAiming = !this.isAiming;
+    this.emitSnapshot();
+  }
+
+  public triggerPlaytestJump(): void {
+    if (this.mode !== 'playtest' || !this.isGrounded) return;
+    if (this.stance !== 'stand') {
+      this.stance = 'stand';
+    } else {
+      this.playerVel.y = this.playtestSettings.jumpForce;
+      this.isGrounded = false;
+    }
+    this.emitSnapshot();
+  }
+
+  public togglePlaytestCrouch(): void {
+    if (this.mode !== 'playtest') return;
+    this.stance = this.stance === 'crouch' ? 'stand' : 'crouch';
+    this.emitSnapshot();
+  }
+
+  public togglePlaytestProne(): void {
+    if (this.mode !== 'playtest') return;
+    this.stance = this.stance === 'prone' ? 'stand' : 'prone';
+    this.emitSnapshot();
+  }
+
+  public togglePlaytestSprint(): void {
+    if (this.mode !== 'playtest') return;
+    this.mobileSprintLock = !this.mobileSprintLock;
+    if (this.mobileSprintLock && this.stance !== 'stand') {
+      this.stance = 'stand';
+    }
+    this.emitSnapshot();
+  }
+
+  public triggerPlaytestReload(): void {
+    if (this.mode !== 'playtest' || this.isReloading) return;
+    const slot = this.playtestSettings.activeSlot;
+    if (slot === 4) return;
+    const slotState = this.playtestSlots[slot];
+    if (slotState.ammoInMag >= slotState.magSize) return;
+    this.isReloading = true;
+    this.reloadElapsed = 0;
+    this.reloadDuration = WEAPONS[slotState.weaponId].reloadTimeSec;
+    this.emitSnapshot();
+  }
+
+  public selectPlaytestWeaponSlot(slot: WeaponSlotId): void {
+    if (this.playtestSettings.activeSlot === slot) return;
+    this.isReloading = false;
+    this.reloadElapsed = 0;
+    this.isAiming = false;
+    this.isFiring = false;
+    this.fireCooldown = 0;
+    this.playtestSettings = {
+      ...this.playtestSettings,
+      activeSlot: slot,
+      weaponId: this.getWeaponForSlot(slot),
+    };
+    if (this.mode === 'playtest') {
+      this.syncRigWeapons();
     }
     this.emitSnapshot();
   }
@@ -2025,20 +2356,34 @@ export class StudioEngine {
   }
 
   private updatePlaytest(dt: number): void {
-    // Movement input
-    let forward = 0;
-    let strafe = 0;
+    // Movement input (keyboard + mobile virtual joystick)
+    let forward = this.mobileMoveY;
+    let strafe = this.mobileMoveX;
     if (this.keys.has('KeyW') || this.keys.has('ArrowUp')) forward += 1;
     if (this.keys.has('KeyS') || this.keys.has('ArrowDown')) forward -= 1;
     if (this.keys.has('KeyD') || this.keys.has('ArrowRight')) strafe += 1;
     if (this.keys.has('KeyA') || this.keys.has('ArrowLeft')) strafe -= 1;
 
-    const isMovingInput = forward !== 0 || strafe !== 0;
+    // Sprint lock moves forward automatically if user isn't steering backward
+    if (this.mobileSprintLock && forward === 0 && strafe === 0) {
+      forward = 1;
+    }
+
+    const inputLen = Math.hypot(forward, strafe);
+    if (inputLen > 1) {
+      forward /= inputLen;
+      strafe /= inputLen;
+    }
+
+    const isMovingInput = inputLen > 0.05;
+    const joystickSprint = this.mobileMoveY > 0.85 && Math.hypot(this.mobileMoveX, this.mobileMoveY) > 0.88;
+    const keySprint = this.keys.has('ShiftLeft') || this.keys.has('ShiftRight');
     const isSprinting =
       isMovingInput &&
-      (this.keys.has('ShiftLeft') || this.keys.has('ShiftRight')) &&
+      (keySprint || this.mobileSprintLock || joystickSprint) &&
       this.stance === 'stand' &&
       !this.isAiming;
+    this.isSprintingState = isSprinting;
 
     const baseSpeed = isSprinting
       ? this.playtestSettings.sprintSpeed
@@ -2051,9 +2396,6 @@ export class StudioEngine {
     _camForward.set(-Math.sin(this.camYaw), 0, -Math.cos(this.camYaw)).normalize();
     _camRight.set(Math.cos(this.camYaw), 0, -Math.sin(this.camYaw)).normalize();
     _moveDir.set(0, 0, 0).addScaledVector(_camForward, forward).addScaledVector(_camRight, strafe);
-    if (_moveDir.lengthSq() > 0.0001) {
-      _moveDir.normalize();
-    }
 
     const targetVx = _moveDir.x * baseSpeed;
     const targetVz = _moveDir.z * baseSpeed;
@@ -2097,6 +2439,20 @@ export class StudioEngine {
       this.isGrounded = false;
     }
 
+    // Reload progress
+    if (this.isReloading) {
+      this.reloadElapsed += dt;
+      if (this.reloadElapsed >= this.reloadDuration) {
+        const slot = this.playtestSettings.activeSlot;
+        if (slot !== 4) {
+          this.playtestSlots[slot].ammoInMag = this.playtestSlots[slot].magSize;
+        }
+        this.isReloading = false;
+        this.reloadElapsed = 0;
+        this.emitSnapshot();
+      }
+    }
+
     const horizSpeed = Math.hypot(this.playerVel.x, this.playerVel.z);
 
     // Character orientation
@@ -2126,6 +2482,7 @@ export class StudioEngine {
         isSprinting,
         isAiming: this.isAiming,
         isFiring: this.isFiring,
+        isReloading: this.isReloading,
         isLobby: false,
         isSkydiving: false,
         isParachuting: false,
@@ -2145,9 +2502,28 @@ export class StudioEngine {
 
     // Weapon test firing
     if (this.fireCooldown > 0) this.fireCooldown -= dt;
-    if (this.isFiring && this.fireCooldown <= 0) {
-      this.fireTestShot();
-      this.fireCooldown = 0.14;
+    if (this.isFiring && this.fireCooldown <= 0 && !this.isReloading) {
+      const activeSlot = this.playtestSettings.activeSlot;
+      if (activeSlot === 4 || this.playtestSettings.weaponId === 'none') {
+        this.fireTestShot();
+        this.fireCooldown = 0.35;
+      } else {
+        const slotState = this.playtestSlots[activeSlot];
+        if (slotState.ammoInMag > 0) {
+          slotState.ammoInMag -= 1;
+          this.fireTestShot();
+          const def = WEAPONS[slotState.weaponId];
+          this.fireCooldown = def.fireRateMs / 1000;
+          if (!def.automatic) {
+            this.isFiring = false;
+          }
+          if (slotState.ammoInMag <= 0) {
+            this.triggerPlaytestReload();
+          }
+        } else {
+          this.triggerPlaytestReload();
+        }
+      }
     }
 
     // Update tracer FX
@@ -2172,15 +2548,22 @@ export class StudioEngine {
 
     // Throttled HUD snapshot update
     this.hudThrottleTimer += dt;
-    if (this.hudThrottleTimer >= 0.1) {
+    if (this.hudThrottleTimer >= 0.08) {
       this.hudThrottleTimer = 0;
       this.emitSnapshot();
     }
   }
 
   private updatePlaytestCamera(dt: number): void {
+    const isSniperZoom = this.isAiming && this.playtestSettings.weaponId === 'awm';
+    const targetFov = isSniperZoom ? 18 : this.isAiming ? 42 : 58;
+    if (Math.abs(this.camera.fov - targetFov) > 0.05) {
+      this.camera.fov = THREE.MathUtils.damp(this.camera.fov, targetFov, 14, dt);
+      this.camera.updateProjectionMatrix();
+    }
+
     const eyeHeight = this.stance === 'crouch' ? 1.08 : this.stance === 'prone' ? 0.45 : 1.56;
-    if (this.playtestSettings.cameraMode === 'first') {
+    if (this.playtestSettings.cameraMode === 'first' || isSniperZoom) {
       _vec3A.set(this.playerPos.x, this.playerPos.y + eyeHeight, this.playerPos.z);
       this.camera.position.copy(_vec3A);
       _vec3B.set(
@@ -2296,8 +2679,13 @@ export class StudioEngine {
     this.pointerDownPos = { x: e.clientX, y: e.clientY };
 
     if (this.mode === 'playtest') {
+      if (e.pointerType === 'touch') {
+        // Touch controls are handled by PlaytestOverlay mobile touch layer & HUD buttons
+        return;
+      }
       if (e.button === 2) {
         this.isAiming = true;
+        this.emitSnapshot();
       } else if (e.button === 0) {
         if (!this.pointerLocked && document.pointerLockElement !== this.renderer.domElement) {
           this.renderer.domElement.requestPointerLock?.();
@@ -2314,22 +2702,38 @@ export class StudioEngine {
 
   private handlePointerMove(e: PointerEvent): void {
     if (this.mode !== 'playtest') return;
+    if (e.pointerType === 'touch') return;
+
+    const sens = this.getActiveSensitivityMultiplier();
+    const ySign = this.playtestSettings.invertY ? -1 : 1;
 
     if (this.pointerLocked) {
-      this.camYaw -= e.movementX * 0.0024;
-      this.camPitch = THREE.MathUtils.clamp(this.camPitch + e.movementY * 0.0022, -1.15, 1.25);
+      this.camYaw -= e.movementX * 0.0022 * sens;
+      this.camPitch = THREE.MathUtils.clamp(
+        this.camPitch + e.movementY * 0.002 * sens * ySign,
+        -1.15,
+        1.25,
+      );
     } else if (this.playtestDragLook) {
       const dx = e.clientX - this.lastPlaytestDragPos.x;
       const dy = e.clientY - this.lastPlaytestDragPos.y;
       this.lastPlaytestDragPos = { x: e.clientX, y: e.clientY };
-      this.camYaw -= dx * 0.004;
-      this.camPitch = THREE.MathUtils.clamp(this.camPitch + dy * 0.0035, -1.15, 1.25);
+      this.camYaw -= dx * 0.0038 * sens;
+      this.camPitch = THREE.MathUtils.clamp(
+        this.camPitch + dy * 0.0033 * sens * ySign,
+        -1.15,
+        1.25,
+      );
     }
   }
 
   private handlePointerUp(e: PointerEvent): void {
     if (this.mode === 'playtest') {
-      if (e.button === 2) this.isAiming = false;
+      if (e.pointerType === 'touch') return;
+      if (e.button === 2) {
+        this.isAiming = false;
+        this.emitSnapshot();
+      }
       if (e.button === 0) {
         this.isFiring = false;
         this.playtestDragLook = false;
@@ -2395,13 +2799,23 @@ export class StudioEngine {
     if (this.mode === 'playtest') {
       this.keys.add(e.code);
       if (e.code === 'KeyC') {
-        this.stance = this.stance === 'crouch' ? 'stand' : 'crouch';
+        this.togglePlaytestCrouch();
       } else if (e.code === 'KeyZ') {
-        this.stance = this.stance === 'prone' ? 'stand' : 'prone';
+        this.togglePlaytestProne();
       } else if (e.code === 'KeyV') {
         this.togglePlaytestCamera();
       } else if (e.code === 'KeyF') {
         this.isFiring = true;
+      } else if (e.code === 'KeyR') {
+        this.triggerPlaytestReload();
+      } else if (e.code === 'Digit1') {
+        this.selectPlaytestWeaponSlot(1);
+      } else if (e.code === 'Digit2') {
+        this.selectPlaytestWeaponSlot(2);
+      } else if (e.code === 'Digit3') {
+        this.selectPlaytestWeaponSlot(3);
+      } else if (e.code === 'Digit4') {
+        this.selectPlaytestWeaponSlot(4);
       }
       return;
     }
@@ -2587,8 +3001,21 @@ export class StudioEngine {
       speed: round3(Math.hypot(this.playerVel.x, this.playerVel.z)),
       stance: this.stance,
       isGrounded: this.isGrounded,
+      isSprinting: this.isSprintingState,
+      isAiming: this.isAiming,
+      isReloading: this.isReloading,
+      reloadProgress:
+        this.isReloading && this.reloadDuration > 0
+          ? Math.min(1, this.reloadElapsed / this.reloadDuration)
+          : 0,
       pointerLocked: this.pointerLocked,
       cameraMode: this.playtestSettings.cameraMode,
+      activeSlot: this.playtestSettings.activeSlot,
+      slots: {
+        1: { ...this.playtestSlots[1] },
+        2: { ...this.playtestSlots[2] },
+        3: { ...this.playtestSlots[3] },
+      },
       lastHitDistance: this.lastHitDistance,
       lastHitMeshName: this.lastHitMeshName,
     };

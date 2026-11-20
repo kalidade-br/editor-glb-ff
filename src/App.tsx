@@ -53,8 +53,18 @@ const INITIAL_SNAPSHOT: StudioSnapshot = {
     speed: 0,
     stance: 'stand',
     isGrounded: true,
+    isSprinting: false,
+    isAiming: false,
+    isReloading: false,
+    reloadProgress: 0,
     pointerLocked: false,
     cameraMode: 'third',
+    activeSlot: 1,
+    slots: {
+      1: { weaponId: 'm4a1', ammoInMag: 30, magSize: 30 },
+      2: { weaponId: 'ump45', ammoInMag: 32, magSize: 32 },
+      3: { weaponId: 'deagle', ammoInMag: 7, magSize: 7 },
+    },
     lastHitDistance: null,
     lastHitMeshName: null,
   },
@@ -224,12 +234,12 @@ export default function App() {
 
         {/* Central 3D Viewport */}
         <main
-          className="relative min-w-0 flex-1 overflow-hidden"
+          className={`relative min-w-0 flex-1 overflow-hidden ${!isEditor ? 'touch-none' : ''}`}
           onDragOver={handleViewportDragOver}
           onDragLeave={handleViewportDragLeave}
           onDrop={handleViewportDrop}
         >
-          <div ref={viewportRef} className="h-full w-full" />
+          <div ref={viewportRef} className={`h-full w-full ${!isEditor ? 'touch-none' : ''}`} />
 
           {/* Panel Toggle Corner Buttons (Editor only) */}
           {isEditor && (
@@ -458,8 +468,20 @@ export default function App() {
           {/* Playtest Overlay */}
           <PlaytestOverlay
             hud={snap.playtestHud}
+            settings={snap.playtestSettings}
             onToggleCamera={() => engineRef.current?.togglePlaytestCamera()}
             onExitPlaytest={() => engineRef.current?.stopPlaytest()}
+            onUpdateSettings={(patch) => engineRef.current?.updatePlaytestSettings(patch)}
+            onMobileMove={(x, y) => engineRef.current?.setMobileMove(x, y)}
+            onLookDelta={(dx, dy) => engineRef.current?.addPlaytestLookDelta(dx, dy)}
+            onFireChange={(firing) => engineRef.current?.setPlaytestFire(firing)}
+            onToggleAim={() => engineRef.current?.togglePlaytestAim()}
+            onJump={() => engineRef.current?.triggerPlaytestJump()}
+            onToggleCrouch={() => engineRef.current?.togglePlaytestCrouch()}
+            onToggleProne={() => engineRef.current?.togglePlaytestProne()}
+            onToggleSprint={() => engineRef.current?.togglePlaytestSprint()}
+            onReload={() => engineRef.current?.triggerPlaytestReload()}
+            onSelectWeaponSlot={(slot) => engineRef.current?.selectPlaytestWeaponSlot(slot)}
           />
         </main>
 
