@@ -830,6 +830,24 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                   </select>
                 </div>
               )}
+              <label className="mt-2.5 flex cursor-pointer items-start gap-2 rounded-md border border-[#232834] bg-[#161a23] px-2.5 py-2 text-xs text-slate-200">
+                <input
+                  type="checkbox"
+                  checked={playtestSettings.editorCharacterPreview}
+                  onChange={(e) =>
+                    onUpdatePlaytest({ editorCharacterPreview: e.target.checked })
+                  }
+                  className="mt-0.5 accent-amber-500"
+                />
+                <span className="leading-snug">
+                  <span className="block text-[11px] font-medium text-slate-100">
+                    Mostrar personagem parado no Editor
+                  </span>
+                  <span className="block text-[10px] text-slate-400">
+                    Substitui o marcador de spawn pelo personagem em repouso para referência de escala.
+                  </span>
+                </span>
+              </label>
             </div>
 
             <div className="space-y-2.5 border-t border-[#222630] pt-3">

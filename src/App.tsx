@@ -19,6 +19,7 @@ import {
   RotateCw,
   Scaling,
   Undo2,
+  User,
   X,
 } from 'lucide-react';
 import { ImportModal } from './components/studio/ImportModal';
@@ -410,6 +411,26 @@ export default function App() {
                       <Redo2 className="h-3.5 w-3.5" />
                     </button>
                   </div>
+
+                  <div className="h-5 w-px bg-[#252a36]" />
+
+                  <button
+                    type="button"
+                    onClick={() =>
+                      engineRef.current?.updatePlaytestSettings({
+                        editorCharacterPreview: !snap.playtestSettings.editorCharacterPreview,
+                      })
+                    }
+                    className={`flex items-center gap-1 rounded-md border px-2.5 py-1.5 text-[11px] font-medium whitespace-nowrap transition-colors ${
+                      snap.playtestSettings.editorCharacterPreview
+                        ? 'border-amber-500/70 bg-amber-500/20 text-amber-300'
+                        : 'border-[#252a36] bg-[#161a23] text-slate-300 hover:border-slate-600'
+                    }`}
+                    title="Mostrar personagem parado no lugar do marcador de spawn enquanto edita"
+                  >
+                    <User className="h-3.5 w-3.5" />
+                    <span className="hidden sm:inline">Personagem</span>
+                  </button>
 
                   <div className="hidden h-5 w-px bg-[#252a36] lg:block" />
 

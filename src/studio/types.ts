@@ -114,6 +114,7 @@ export interface PlaytestSettings {
   aimSensitivity: number; // 0 .. 100
   scopeSensitivity: number; // 0 .. 100
   invertY: boolean;
+  editorCharacterPreview: boolean;
 }
 
 export interface PlaytestHudState {
@@ -236,6 +237,7 @@ export const DEFAULT_PLAYTEST_SETTINGS: PlaytestSettings = {
   aimSensitivity: 45,
   scopeSensitivity: 35,
   invertY: false,
+  editorCharacterPreview: true,
 };
 
 export const QUALITY_LABELS: Record<GraphicsQuality, string> = {

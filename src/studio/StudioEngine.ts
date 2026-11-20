@@ -191,6 +191,7 @@ interface SavedPlaytestPrefs {
   slot1Weapon?: WeaponId;
   slot2Weapon?: WeaponId;
   slot3Weapon?: WeaponId;
+  editorCharacterPreview?: boolean;
 }
 
 function loadPlaytestPrefs(): SavedPlaytestPrefs {
@@ -216,6 +217,7 @@ function savePlaytestPrefs(settings: PlaytestSettings): void {
       slot1Weapon: settings.slot1Weapon,
       slot2Weapon: settings.slot2Weapon,
       slot3Weapon: settings.slot3Weapon,
+      editorCharacterPreview: settings.editorCharacterPreview,
     };
     window.localStorage.setItem(PLAYTEST_PREFS_STORAGE_KEY, JSON.stringify(payload));
   } catch {
@@ -265,7 +267,13 @@ export class StudioEngine {
   private selectionBoxHelper: THREE.Box3Helper;
 
   private editorObjectsGroup: THREE.Group;
+  private editorPreviewGroup: THREE.Group;
   private playtestGroup: THREE.Group;
+
+  private editorPreviewRig: CharacterRig | null = null;
+  private editorPreviewCustomObject: THREE.Object3D | null = null;
+  private editorPreviewMixer: THREE.AnimationMixer | null = null;
+  private editorPreviewAnimator = new CharacterAnimator();
 
   private entries: SceneEntry[] = [];
   private selectedId: string | null = null;
@@ -512,6 +520,10 @@ export class StudioEngine {
     this.editorObjectsGroup.name = 'StudioSceneRoot';
     this.scene.add(this.editorObjectsGroup);
 
+    this.editorPreviewGroup = new THREE.Group();
+    this.editorPreviewGroup.name = 'StudioEditorCharacterPreview';
+    this.scene.add(this.editorPreviewGroup);
+
     this.playtestGroup = new THREE.Group();
     this.playtestGroup.name = 'StudioPlaytestRoot';
     this.scene.add(this.playtestGroup);
@@ -577,8 +589,14 @@ export class StudioEngine {
     this.resizeObserver = new ResizeObserver(() => this.handleResize());
     this.resizeObserver.observe(this.container);
 
-    // Preload Adam/Eva assets in background for Playtest character rig
-    preloadAdamAssets().catch(() => {});
+    // Preload Adam/Eva assets in background for Playtest & Editor Preview character rig
+    preloadAdamAssets()
+      .then(() => {
+        if (!this.disposed && this.mode === 'editor') {
+          this.syncEditorCharacterPreview(true);
+        }
+      })
+      .catch(() => {});
 
     // Populate initial starter scene so viewport is alive and immediately testable
     void this.seedStarterScene();
@@ -595,6 +613,7 @@ export class StudioEngine {
     await this.addBuiltinAsset('house_god', [0, 0, -4], false);
     await this.addBuiltinAsset('container_blue', [9, 0, 2], false);
     this.selectObject(null);
+    this.syncEditorCharacterPreview(true);
     this.emitSnapshot();
   }
 
@@ -650,6 +669,7 @@ export class StudioEngine {
             this.cameraLerpActive = false;
           }
         }
+        this.updateEditorCharacterPreview(dt);
         this.orbitControls.update();
       } else {
         this.updatePlaytest(dt);
@@ -952,6 +972,10 @@ export class StudioEngine {
       });
     }
 
+    if (entry.role === 'spawn' && this.mode === 'editor') {
+      this.syncEditorCharacterPreview();
+    }
+
     return entry;
   }
 
@@ -1047,8 +1071,17 @@ export class StudioEngine {
       this.selectionBoxHelper.visible = false;
       return;
     }
-    entry.root.updateMatrixWorld(true);
-    _box3.setFromObject(entry.root);
+    if (
+      entry.role === 'spawn' &&
+      this.playtestSettings.editorCharacterPreview &&
+      this.editorPreviewGroup.visible
+    ) {
+      this.editorPreviewGroup.updateMatrixWorld(true);
+      _box3.setFromObject(this.editorPreviewGroup);
+    } else {
+      entry.root.updateMatrixWorld(true);
+      _box3.setFromObject(entry.root);
+    }
     if (_box3.isEmpty()) {
       this.selectionBoxHelper.visible = false;
       return;
@@ -1261,6 +1294,9 @@ export class StudioEngine {
       });
     }
 
+    if (entry.role === 'spawn' && this.mode === 'editor') {
+      this.syncEditorCharacterPreview();
+    }
     this.updateSelectionHelper();
     this.emitSnapshot();
   }
@@ -1439,6 +1475,9 @@ export class StudioEngine {
     const entry = this.entries[idx];
     this.editorObjectsGroup.remove(entry.root);
     this.entries.splice(idx, 1);
+    if (entry.role === 'spawn' && this.mode === 'editor') {
+      this.syncEditorCharacterPreview();
+    }
     if (this.selectedId === id) {
       this.selectObject(null);
     } else {
@@ -1454,6 +1493,9 @@ export class StudioEngine {
     } else {
       this.entries.push(entry);
     }
+    if (entry.role === 'spawn' && this.mode === 'editor') {
+      this.syncEditorCharacterPreview();
+    }
     this.selectObject(entry.id);
   }
 
@@ -1468,6 +1510,7 @@ export class StudioEngine {
     this.redoStack = [];
     this.selectedId = null;
     this.selectionBoxHelper.visible = false;
+    this.syncEditorCharacterPreview();
     this.showStatus('Cena limpa.');
     this.emitSnapshot();
   }
@@ -1643,29 +1686,148 @@ export class StudioEngine {
     };
   }
 
-  private syncRigWeapons(): void {
-    if (!this.playerRig) return;
+  private syncRigWeaponsFor(rig: CharacterRig): void {
     const active = this.playtestSettings.activeSlot;
     const activeWeapon = this.getWeaponForSlot(active);
-    this.playerRig.setWeapon(activeWeapon === 'none' ? null : activeWeapon);
+    rig.setWeapon(activeWeapon === 'none' ? null : activeWeapon);
 
     if (active === 1) {
-      this.playerRig.setBackWeapons(this.playtestSettings.slot2Weapon, null);
+      rig.setBackWeapons(this.playtestSettings.slot2Weapon, null);
     } else if (active === 2) {
-      this.playerRig.setBackWeapons(this.playtestSettings.slot1Weapon, null);
+      rig.setBackWeapons(this.playtestSettings.slot1Weapon, null);
     } else {
-      this.playerRig.setBackWeapons(
+      rig.setBackWeapons(
         this.playtestSettings.slot1Weapon,
         this.playtestSettings.slot2Weapon,
       );
     }
-    this.playerRig.setPistolBackWeapon?.(
+    rig.setPistolBackWeapon?.(
       active === 3 ? null : this.playtestSettings.slot3Weapon,
     );
   }
 
+  private syncRigWeapons(): void {
+    if (!this.playerRig) return;
+    this.syncRigWeaponsFor(this.playerRig);
+  }
+
+  private cleanupEditorPreviewCharacter(): void {
+    if (this.editorPreviewRig) {
+      this.editorPreviewGroup.remove(this.editorPreviewRig.root);
+      this.editorPreviewRig.dispose();
+      this.editorPreviewRig = null;
+    }
+    if (this.editorPreviewCustomObject) {
+      this.editorPreviewGroup.remove(this.editorPreviewCustomObject);
+      this.editorPreviewCustomObject = null;
+    }
+    if (this.editorPreviewMixer) {
+      this.editorPreviewMixer.stopAllAction();
+      this.editorPreviewMixer = null;
+    }
+  }
+
+  private rebuildEditorPreviewCharacter(): void {
+    this.cleanupEditorPreviewCharacter();
+    this.editorPreviewAnimator.reset();
+
+    const customEntry =
+      this.playtestSettings.playerModel === 'custom' &&
+      this.playtestSettings.customCharacterObjectId
+        ? this.entries.find((e) => e.id === this.playtestSettings.customCharacterObjectId)
+        : null;
+
+    if (customEntry) {
+      const cloned = SkeletonUtils.clone(customEntry.content);
+      cloned.scale.copy(customEntry.root.scale);
+      cloned.position.set(0, 0, 0);
+      this.editorPreviewCustomObject = cloned;
+      this.editorPreviewGroup.add(cloned);
+      if (customEntry.animations.length > 0) {
+        this.editorPreviewMixer = new THREE.AnimationMixer(cloned);
+        const clip = customEntry.animations[customEntry.activeAnimIndex] ?? customEntry.animations[0];
+        this.editorPreviewMixer.clipAction(clip).play();
+      }
+      return;
+    }
+
+    const cfg: CharacterConfig = {
+      ...DEFAULT_PLAYTEST_CHAR,
+      modelId: this.playtestSettings.playerModel === 'eva' ? 'eva' : 'adam',
+    };
+    const rig = createCharacterRig(cfg, this.textures.camoParachute, this.textures.contactShadow);
+    this.syncRigWeaponsFor(rig);
+    this.editorPreviewRig = rig;
+    this.editorPreviewGroup.add(rig.root);
+  }
+
+  private syncEditorCharacterPreview(forceRebuild = false): void {
+    const showPreview = this.mode === 'editor' && this.playtestSettings.editorCharacterPreview;
+
+    for (const e of this.entries) {
+      if (e.role === 'spawn') {
+        e.content.visible = this.mode === 'editor' && !this.playtestSettings.editorCharacterPreview;
+      }
+    }
+
+    const spawnEntry = this.entries.find((e) => e.role === 'spawn');
+    if (!showPreview || (spawnEntry && !spawnEntry.visible)) {
+      this.editorPreviewGroup.visible = false;
+      return;
+    }
+
+    this.editorPreviewGroup.visible = true;
+    if (spawnEntry) {
+      this.editorPreviewGroup.position.copy(spawnEntry.root.position);
+      this.editorPreviewGroup.rotation.set(0, spawnEntry.root.rotation.y, 0);
+    } else {
+      this.editorPreviewGroup.position.set(0, 0, 8);
+      this.editorPreviewGroup.rotation.set(0, Math.PI, 0);
+    }
+
+    if (forceRebuild || (!this.editorPreviewRig && !this.editorPreviewCustomObject)) {
+      this.rebuildEditorPreviewCharacter();
+    } else if (this.editorPreviewRig) {
+      this.syncRigWeaponsFor(this.editorPreviewRig);
+    }
+  }
+
+  private updateEditorCharacterPreview(dt: number): void {
+    if (!this.editorPreviewGroup.visible) return;
+    const spawnEntry = this.entries.find((e) => e.role === 'spawn');
+    if (spawnEntry) {
+      this.editorPreviewGroup.position.copy(spawnEntry.root.position);
+      this.editorPreviewGroup.rotation.set(0, spawnEntry.root.rotation.y, 0);
+    }
+
+    if (this.editorPreviewRig) {
+      this.editorPreviewAnimator.update(this.editorPreviewRig, {
+        dt,
+        speed: 0,
+        stance: 'stand',
+        isGrounded: true,
+        isSprinting: false,
+        isAiming: false,
+        isFiring: false,
+        isReloading: false,
+        isLobby: false,
+        isSkydiving: false,
+        isParachuting: false,
+        isDead: false,
+        hasWeapon: this.playtestSettings.weaponId !== 'none',
+        turnDeltaRad: 0,
+        pitchRad: 0,
+      });
+    } else if (this.editorPreviewMixer) {
+      this.editorPreviewMixer.update(dt);
+    }
+  }
+
   public updatePlaytestSettings(patch: Partial<PlaytestSettings>): void {
     const prevQuality = this.playtestSettings.quality;
+    const prevModel = this.playtestSettings.playerModel;
+    const prevCustomId = this.playtestSettings.customCharacterObjectId;
+    const prevPreview = this.playtestSettings.editorCharacterPreview;
     const next = { ...this.playtestSettings, ...patch };
 
     // Keep weaponId and slots consistent
@@ -1719,6 +1881,13 @@ export class StudioEngine {
       this.isReloading = false;
       this.reloadElapsed = 0;
       this.syncRigWeapons();
+    } else {
+      const modelChanged =
+        next.playerModel !== prevModel ||
+        next.customCharacterObjectId !== prevCustomId ||
+        next.editorCharacterPreview !== prevPreview;
+      this.syncEditorCharacterPreview(modelChanged);
+      this.updateSelectionHelper();
     }
 
     savePlaytestPrefs(this.playtestSettings);
@@ -1965,6 +2134,7 @@ export class StudioEngine {
         }
       }
 
+      this.syncEditorCharacterPreview(true);
       this.showStatus(`Projeto "${file.name}" importado com ${this.entries.length} objeto(s).`);
     } catch (err) {
       this.errorMessage = `Erro ao importar JSON: ${err instanceof Error ? err.message : String(err)}`;
@@ -1993,6 +2163,7 @@ export class StudioEngine {
     if (this.mode === 'playtest') return;
 
     this.mode = 'playtest';
+    this.editorPreviewGroup.visible = false;
     this.transformControls.detach();
     this.selectionBoxHelper.visible = false;
     this.gridHelper.visible = false;
@@ -2148,7 +2319,7 @@ export class StudioEngine {
     }
     this.tracers = [];
 
-    // Restore spawn marker visibility
+    // Restore spawn marker visibility & editor idle character preview
     for (const e of this.entries) {
       if (e.role === 'spawn') {
         e.root.visible = e.visible;
@@ -2161,6 +2332,7 @@ export class StudioEngine {
     if (entry && !entry.locked && this.transformMode !== 'select') {
       this.transformControls.attach(entry.root);
     }
+    this.syncEditorCharacterPreview(true);
     this.updateSelectionHelper();
     this.camera.position.set(
       this.playerPos.x + 12,
@@ -2755,6 +2927,19 @@ export class StudioEngine {
     this.raycaster.near = 0.1;
     this.raycaster.far = 1500;
     this.raycaster.setFromCamera(_mouseNdc, this.camera);
+
+    // Clicking the idle preview character selects the spawn point entry (if present)
+    if (this.editorPreviewGroup.visible) {
+      const previewHits = this.raycaster.intersectObject(this.editorPreviewGroup, true);
+      if (previewHits.length > 0) {
+        const spawnEntry = this.entries.find((entry) => entry.role === 'spawn');
+        if (spawnEntry) {
+          this.selectObject(spawnEntry.id);
+          return;
+        }
+      }
+    }
+
     const hits = this.raycaster.intersectObjects(this.editorObjectsGroup.children, true);
 
     if (hits.length > 0) {
@@ -3059,6 +3244,7 @@ export class StudioEngine {
     window.removeEventListener('keyup', this.boundHandlers.onKeyUp);
     document.removeEventListener('pointerlockchange', this.boundHandlers.onPointerLockChange);
 
+    this.cleanupEditorPreviewCharacter();
     this.cleanupPlaytestCharacter();
     this.transformControls.dispose();
     this.orbitControls.dispose();
