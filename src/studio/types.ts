@@ -189,7 +189,7 @@ export interface StudioProjectFile {
   schemaVersion: 1;
   savedAt: string;
   environment: EnvironmentSettings;
-  playtestSettings: PlaytestSettings;
+  playtestSettings?: PlaytestSettings;
   objects: SerializedSceneObject[];
 }
 

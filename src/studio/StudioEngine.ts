@@ -2,7 +2,7 @@ import * as THREE from 'three';
 import { OrbitControls } from 'three/addons/controls/OrbitControls.js';
 import { TransformControls } from 'three/addons/controls/TransformControls.js';
 import { RoomEnvironment } from 'three/addons/environments/RoomEnvironment.js';
-import { GLTFExporter } from 'three/addons/exporters/GLTFExporter.js';
+import { GLTFExporter, GLTFExporterOptions } from 'three/addons/exporters/GLTFExporter.js';
 import { DRACOLoader } from 'three/addons/loaders/DRACOLoader.js';
 import { GLTFLoader } from 'three/addons/loaders/GLTFLoader.js';
 import * as SkeletonUtils from 'three/addons/utils/SkeletonUtils.js';
@@ -1522,8 +1522,14 @@ export class StudioEngine {
   public focusObject(id: string): void {
     const entry = this.entries.find((e) => e.id === id);
     if (!entry) return;
-    entry.root.updateMatrixWorld(true);
-    _box3.setFromObject(entry.root);
+    const boxTarget =
+      entry.role === 'spawn' &&
+      this.playtestSettings.editorCharacterPreview &&
+      this.editorPreviewGroup.visible
+        ? this.editorPreviewGroup
+        : entry.root;
+    boxTarget.updateMatrixWorld(true);
+    _box3.setFromObject(boxTarget);
     const center = _box3.isEmpty() ? entry.root.position.clone() : _box3.getCenter(new THREE.Vector3());
     const size = _box3.isEmpty() ? new THREE.Vector3(4, 4, 4) : _box3.getSize(new THREE.Vector3());
     const radius = Math.max(2.5, size.length() * 0.75);
@@ -1919,20 +1925,20 @@ export class StudioEngine {
       }
 
       if (targets.length === 0) {
-        throw new Error('Nenhum modelo visível para exportar.');
+        throw new Error(
+          'Nenhum modelo visível para exportar (o ponto de spawn e o personagem de pré-visualização não são salvos juntos).',
+        );
       }
 
-      const animOpt = !hasAnyAnim
-        ? undefined
-        : targets.length === 1
-          ? perTargetAnims[0]
-          : perTargetAnims;
-
-      const result = await this.exporter.parseAsync(targets, {
+      const parseOptions: GLTFExporterOptions = {
         binary: true,
         onlyVisible: true,
-        animations: animOpt,
-      });
+      };
+      if (hasAnyAnim) {
+        parseOptions.animations = targets.length === 1 ? perTargetAnims[0] : perTargetAnims;
+      }
+
+      const result = await this.exporter.parseAsync(targets, parseOptions);
 
       if (!(result instanceof ArrayBuffer)) {
         throw new Error('Falha ao gerar binário GLB.');
@@ -1942,7 +1948,7 @@ export class StudioEngine {
         new Blob([result], { type: 'model/gltf-binary' }),
         `cena_studio_${Date.now()}.glb`,
       );
-      this.showStatus('Cena completa exportada em .GLB!');
+      this.showStatus('Cena exportada em .GLB (sem spawn/personagem de teste)!');
     } catch (err) {
       this.errorMessage = `Erro ao exportar .GLB: ${err instanceof Error ? err.message : String(err)}`;
     } finally {
@@ -1955,19 +1961,31 @@ export class StudioEngine {
     const entry = this.entries.find((e) => e.id === id);
     if (!entry) return;
 
+    if (entry.role === 'spawn') {
+      this.showStatus(
+        'O ponto de spawn e o personagem de pré-visualização são apenas para visualização e não são exportados.',
+      );
+      this.emitSnapshot();
+      return;
+    }
+
     this.setLoading(true, `Exportando ${entry.name}.glb...`);
     try {
-      const result = await this.exporter.parseAsync(entry.root, {
+      const parseOptions: GLTFExporterOptions = {
         binary: true,
         onlyVisible: true,
-        animations: entry.animations.length > 0 ? entry.animations : undefined,
-      });
+      };
+      if (entry.animations.length > 0) {
+        parseOptions.animations = entry.animations;
+      }
+
+      const result = await this.exporter.parseAsync(entry.root, parseOptions);
       if (!(result instanceof ArrayBuffer)) {
         throw new Error('Falha ao gerar binário GLB.');
       }
       const safeName = entry.name.replace(/[^a-zA-Z0-9_-]/g, '_');
       this.triggerDownload(new Blob([result], { type: 'model/gltf-binary' }), `${safeName}.glb`);
-      this.showStatus(`Asset "${entry.name}.glb" exportado!`);
+      this.showStatus(`Asset "${safeName}.glb" exportado!`);
     } catch (err) {
       this.errorMessage = `Erro ao exportar asset: ${err instanceof Error ? err.message : String(err)}`;
     } finally {
@@ -1981,6 +1999,7 @@ export class StudioEngine {
     try {
       const serialized: SerializedSceneObject[] = [];
       for (const e of this.entries) {
+        if (e.role === 'spawn') continue;
         let embeddedGlbBase64: string | undefined;
         if (e.sourceType === 'file') {
           if (e.rawBuffer && e.rawBuffer.byteLength <= 12 * 1024 * 1024) {
@@ -2027,7 +2046,6 @@ export class StudioEngine {
         schemaVersion: 1,
         savedAt: new Date().toISOString(),
         environment: { ...this.environment },
-        playtestSettings: { ...this.playtestSettings },
         objects: serialized,
       };
 
@@ -2036,7 +2054,7 @@ export class StudioEngine {
         new Blob([jsonText], { type: 'application/json' }),
         `projeto_studio_${Date.now()}.json`,
       );
-      this.showStatus('Projeto salvo em .JSON!');
+      this.showStatus('Projeto salvo em .JSON (apenas objetos da cena)!');
     } catch (err) {
       this.errorMessage = `Erro ao salvar projeto: ${err instanceof Error ? err.message : String(err)}`;
     } finally {
@@ -2058,11 +2076,9 @@ export class StudioEngine {
       if (project.environment) {
         this.applyEnvironmentSettings(project.environment, false);
       }
-      if (project.playtestSettings) {
-        this.playtestSettings = { ...DEFAULT_PLAYTEST_SETTINGS, ...project.playtestSettings };
-      }
 
       for (const item of project.objects) {
+        if (item.role === 'spawn') continue;
         let content: THREE.Object3D | null = null;
         let animations: THREE.AnimationClip[] = [];
         let rawBuffer: ArrayBuffer | undefined;
@@ -2134,8 +2150,13 @@ export class StudioEngine {
         }
       }
 
+      const loadedCount = this.entries.length;
+      if (!this.entries.some((e) => e.role === 'spawn')) {
+        await this.addBuiltinAsset('spawn_point', [0, 0, 8], false);
+      }
+      this.selectObject(null);
       this.syncEditorCharacterPreview(true);
-      this.showStatus(`Projeto "${file.name}" importado com ${this.entries.length} objeto(s).`);
+      this.showStatus(`Projeto "${file.name}" importado com ${loadedCount} objeto(s).`);
     } catch (err) {
       this.errorMessage = `Erro ao importar JSON: ${err instanceof Error ? err.message : String(err)}`;
     } finally {

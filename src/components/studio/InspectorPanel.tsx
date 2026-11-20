@@ -195,15 +195,17 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                   onChange={(e) => onUpdateMeta(selected.id, { name: e.target.value })}
                   className="min-w-0 flex-1 rounded border border-[#272d3a] bg-[#0d0f14] px-2.5 py-1.5 text-xs font-semibold text-white focus:border-amber-500 focus:outline-none"
                 />
-                <button
-                  type="button"
-                  onClick={() => onExportSelectedGlb(selected.id)}
-                  className="flex shrink-0 items-center gap-1 rounded border border-[#2a3140] bg-[#181c26] px-2.5 py-1.5 text-[11px] font-medium text-slate-200 hover:border-amber-500/60 hover:text-amber-300"
-                  title="Exportar apenas este objeto em .GLB"
-                >
-                  <Download className="h-3 w-3" />
-                  .GLB
-                </button>
+                {selected.role !== 'spawn' && (
+                  <button
+                    type="button"
+                    onClick={() => onExportSelectedGlb(selected.id)}
+                    className="flex shrink-0 items-center gap-1 rounded border border-[#2a3140] bg-[#181c26] px-2.5 py-1.5 text-[11px] font-medium text-slate-200 hover:border-amber-500/60 hover:text-amber-300"
+                    title="Exportar apenas este objeto em .GLB"
+                  >
+                    <Download className="h-3 w-3" />
+                    .GLB
+                  </button>
+                )}
               </div>
               <div className="flex items-center justify-between gap-2">
                 <select
@@ -220,10 +222,16 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                   ))}
                 </select>
               </div>
-              <div className="font-mono text-[11px] text-slate-400">
-                {selected.meshCount} malhas · {selected.triangleCount.toLocaleString('pt-BR')} tris ·{' '}
-                {selected.dimensions[0]}×{selected.dimensions[1]}×{selected.dimensions[2]}m
-              </div>
+              {selected.role === 'spawn' ? (
+                <div className="rounded border border-amber-500/30 bg-amber-500/10 px-2.5 py-1.5 text-[11px] leading-snug text-amber-200">
+                  Apenas para visualização e ponto de nascimento no teste — não é salvo junto ao exportar .GLB ou .JSON.
+                </div>
+              ) : (
+                <div className="font-mono text-[11px] text-slate-400">
+                  {selected.meshCount} malhas · {selected.triangleCount.toLocaleString('pt-BR')} tris ·{' '}
+                  {selected.dimensions[0]}×{selected.dimensions[1]}×{selected.dimensions[2]}m
+                </div>
+              )}
             </div>
 
             {/* Transform */}
@@ -844,7 +852,7 @@ export const InspectorPanel: React.FC<InspectorPanelProps> = ({
                     Mostrar personagem parado no Editor
                   </span>
                   <span className="block text-[10px] text-slate-400">
-                    Substitui o marcador de spawn pelo personagem em repouso para referência de escala.
+                    Apenas para dar uma olhada de perto e comparar escala (não é salvo junto ao exportar).
                   </span>
                 </span>
               </label>
